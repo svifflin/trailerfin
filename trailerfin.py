@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import urllib.parse
 import time
 import threading
+import logging
 
 try:
     import schedule
@@ -15,6 +16,8 @@ except ImportError:
     schedule = None
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
 base_path = os.getenv("SCAN_PATH")
 video_filename = os.getenv("VIDEO_FILENAME")
@@ -36,7 +39,7 @@ def get_trailer_video_page_url(imdb_id):
     try:
         response = requests.get(url, headers=headers, timeout=20)
         if response.status_code != 200:
-            print(f"Failed to fetch trailers for {imdb_id} (status {response.status_code})")
+            logging.error(f"Failed to fetch trailers for {imdb_id} (status {response.status_code})")
             return None
         soup = BeautifulSoup(response.text, 'html.parser')
         trailer_links = soup.find_all('a', href=re.compile(r'/video/vi\\d+'))
@@ -51,22 +54,22 @@ def get_trailer_video_page_url(imdb_id):
         if trailer_links:
             video_page_url = f"https://www.imdb.com{trailer_links[0]['href']}"
             return video_page_url
-        print(f"No video found for {imdb_id}")
+        logging.warning(f"No video found for {imdb_id}")
         return None
     except Exception as e:
-        print(f"Error fetching trailers for {imdb_id}: {e}")
+        logging.error(f"Error fetching trailers for {imdb_id}: {e}")
         return None
 
 def get_direct_video_url_from_page(video_page_url):
     try:
         response = requests.get(video_page_url, headers=headers, timeout=20)
         if response.status_code != 200:
-            print(f"Failed to fetch video page: {video_page_url} (status {response.status_code})")
+            logging.error(f"Failed to fetch video page: {video_page_url} (status {response.status_code})")
             return None
         soup = BeautifulSoup(response.text, 'html.parser')
         script_tag = soup.find('script', id='__NEXT_DATA__', type='application/json')
         if not script_tag:
-            print(f"No __NEXT_DATA__ script tag found on page: {video_page_url}")
+            logging.error(f"No __NEXT_DATA__ script tag found on page: {video_page_url}")
             return None
         import json
         data = json.loads(script_tag.string)
@@ -85,10 +88,10 @@ def get_direct_video_url_from_page(video_page_url):
             return best['url'] + '#t=8'
         if playback_urls:
             return playback_urls[0]['url'] + '#t=8'
-        print(f"No playback URLs found in JSON on page: {video_page_url}")
+        logging.warning(f"No playback URLs found in JSON on page: {video_page_url}")
         return None
     except Exception as e:
-        print(f"Error parsing playback URLs from JSON: {e}")
+        logging.error(f"Error parsing playback URLs from JSON: {e}")
         return None
 
 def create_or_update_strm_file(folder_path, video_url):
@@ -97,7 +100,7 @@ def create_or_update_strm_file(folder_path, video_url):
     strm_path = os.path.join(backdrops_path, video_filename)
     with open(strm_path, "w") as f:
         f.write(video_url)
-    print(f"Updated {strm_path}")
+    logging.info(f"Updated {strm_path}")
 
 def is_strm_expired(strm_path):
     if not os.path.exists(strm_path):
@@ -115,13 +118,13 @@ def is_strm_expired(strm_path):
         now = int(time.time())
         return now >= expires
     except Exception as e:
-        print(f"Error checking expiration for {strm_path}: {e}")
+        logging.error(f"Error checking expiration for {strm_path}: {e}")
         return True
 
 def scan_and_refresh_trailers(scan_path=None):
     path_to_scan = scan_path if scan_path else base_path
     if not os.path.exists(path_to_scan):
-        print(f"Provided path does not exist: {path_to_scan}")
+        logging.error(f"Provided path does not exist: {path_to_scan}")
         return
     for root, dirs, files in os.walk(path_to_scan):
         match = re.search(r'\{imdb-(tt\d+)\}', root)
@@ -132,9 +135,9 @@ def scan_and_refresh_trailers(scan_path=None):
             backdrops_path = os.path.join(root, "backdrops")
             strm_path = os.path.join(backdrops_path, video_filename)
             if not is_strm_expired(strm_path):
-                print(f"[{datetime.now()}] Trailer link still valid for {imdb_id} in {root}")
+                logging.info(f"Trailer link still valid for {imdb_id} in {root}")
                 continue
-            print(f"[{datetime.now()}] Refreshing trailer for {imdb_id} in {root}")
+            logging.info(f"Refreshing trailer for {imdb_id} in {root}")
             video_page_url = get_trailer_video_page_url(imdb_id)
             if video_page_url:
                 video_url = get_direct_video_url_from_page(video_page_url)
@@ -143,12 +146,14 @@ def scan_and_refresh_trailers(scan_path=None):
 
 def run_scheduler(scan_path=None):
     if not schedule:
-        print("schedule module not installed. Please install with 'pip install schedule'.")
+        logging.error("schedule module not installed. Please install with 'pip install schedule'.")
         return
     def job():
         scan_and_refresh_trailers(scan_path)
+    # Run once immediately on startup
+    job()
     schedule.every(schedule_days).days.do(job)
-    print(f"Scheduler started. Running every {schedule_days} day(s).")
+    logging.info(f"Scheduler started. Running every {schedule_days} day(s).")
     while True:
         schedule.run_pending()
         time.sleep(60)

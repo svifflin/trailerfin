@@ -13,6 +13,7 @@ services:
     labels:
       com.github.saltbox.saltbox_managed: true
     volumes:
+      - /mnt:/mnt
       - /opt/trailerfin:/app
       - /etc/localtime:/etc/localtime:ro
 
