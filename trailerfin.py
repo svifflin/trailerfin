@@ -9,6 +9,7 @@ import urllib.parse
 import time
 import threading
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     import schedule
@@ -32,7 +33,11 @@ headers = {
     'Upgrade-Insecure-Requests': '1',
 }
 
-
+workers_env = os.getenv("WORKERS")
+try:
+    default_worker_count = int(workers_env) if workers_env is not None else 4
+except ValueError:
+    default_worker_count = 4
 
 def get_trailer_video_page_url(imdb_id):
     url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,asc"
@@ -121,36 +126,53 @@ def is_strm_expired(strm_path):
         logging.error(f"Error checking expiration for {strm_path}: {e}")
         return True
 
-def scan_and_refresh_trailers(scan_path=None):
+def process_imdb_folder(root, imdb_id):
+    try:
+        backdrops_path = os.path.join(root, "backdrops")
+        strm_path = os.path.join(backdrops_path, video_filename)
+        if not is_strm_expired(strm_path):
+            logging.info(f"Trailer link still valid for {imdb_id} in {root}")
+            return
+        logging.info(f"Refreshing trailer for {imdb_id} in {root}")
+        video_page_url = get_trailer_video_page_url(imdb_id)
+        if video_page_url:
+            video_url = get_direct_video_url_from_page(video_page_url)
+            if video_url:
+                create_or_update_strm_file(root, video_url)
+    except Exception as e:
+        logging.error(f"Worker error for {imdb_id} in {root}: {e}")
+
+def scan_and_refresh_trailers(scan_path=None, worker_count=4):
     path_to_scan = scan_path if scan_path else base_path
     if not os.path.exists(path_to_scan):
         logging.error(f"Provided path does not exist: {path_to_scan}")
         return
+    imdb_folders = []
     for root, dirs, files in os.walk(path_to_scan):
         match = re.search(r'\{imdb-(tt\d+)\}', root)
         if match:
             if not root.rstrip(os.sep).endswith(f'{{imdb-{match.group(1)}}}'): 
                 continue
             imdb_id = match.group(1)
-            backdrops_path = os.path.join(root, "backdrops")
-            strm_path = os.path.join(backdrops_path, video_filename)
-            if not is_strm_expired(strm_path):
-                logging.info(f"Trailer link still valid for {imdb_id} in {root}")
-                continue
-            logging.info(f"Refreshing trailer for {imdb_id} in {root}")
-            video_page_url = get_trailer_video_page_url(imdb_id)
-            if video_page_url:
-                video_url = get_direct_video_url_from_page(video_page_url)
-                if video_url:
-                    create_or_update_strm_file(root, video_url)
+            imdb_folders.append((root, imdb_id))
+    if not imdb_folders:
+        logging.info("No IMDb folders found to process.")
+        return
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_folder = {executor.submit(process_imdb_folder, root, imdb_id): (root, imdb_id) for root, imdb_id in imdb_folders}
+        for future in as_completed(future_to_folder):
+            root, imdb_id = future_to_folder[future]
+            try:
+                future.result()
+            except Exception as exc:
+                logging.error(f"Exception in worker for {imdb_id} in {root}: {exc}")
 
-def run_scheduler(scan_path=None):
+def run_scheduler(scan_path=None, worker_count=4):
     if not schedule:
         logging.error("schedule module not installed. Please install with 'pip install schedule'.")
         return
     def job():
-        scan_and_refresh_trailers(scan_path)
-    # Run once immediately on startup
+        scan_and_refresh_trailers(scan_path, worker_count)
     job()
     schedule.every(schedule_days).days.do(job)
     logging.info(f"Scheduler started. Running every {schedule_days} day(s).")
@@ -162,8 +184,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Scan and refresh IMDb trailers.")
     parser.add_argument('--dir', type=str, help='Directory to scan (defaults to /mnt/plex)')
     parser.add_argument('--schedule', action='store_true', help='Run as a weekly scheduled job')
+    parser.add_argument('--workers', type=int, default=default_worker_count, help=f'Number of worker threads (default: {default_worker_count})')
     args = parser.parse_args()
     if args.schedule:
-        run_scheduler(args.dir)
+        run_scheduler(args.dir, args.workers)
     else:
-        scan_and_refresh_trailers(args.dir)
+        scan_and_refresh_trailers(args.dir, args.workers)
