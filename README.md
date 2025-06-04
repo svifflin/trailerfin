@@ -31,12 +31,14 @@ Create a `.env` file in the project root with the following variables:
 ```env
 SCAN_PATH=/path/to/your/media
 VIDEO_FILENAME=trailer.strm
-SCHEDULE_DAYS=7
+SCHEDULE_DAYS=1
+WORKERS=4
 ```
 
 - `SCAN_PATH`: Directory to scan for IMDb IDs
 - `VIDEO_FILENAME`: Name of the .strm file to update
 - `SCHEDULE_DAYS`: Interval in days for scheduled refresh
+- `WORKERS` : Amount of workers to use
 
 ### 3. Build and Run with Docker
 
