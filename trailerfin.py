@@ -40,29 +40,60 @@ except ValueError:
     default_worker_count = 4
 
 def get_trailer_video_page_url(imdb_id):
-    url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,asc"
+    # First try descending order (newest first) for trailers
+    url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,desc"
     try:
         response = requests.get(url, headers=headers, timeout=20)
         if response.status_code != 200:
             logging.error(f"Failed to fetch trailers for {imdb_id} (status {response.status_code})")
             return None
+        
         soup = BeautifulSoup(response.text, 'html.parser')
-        trailer_links = soup.find_all('a', href=re.compile(r'/video/vi\\d+'))
-        if not trailer_links:
-            # Broader match: any link containing '/video/vi'
-            trailer_links = soup.find_all('a', href=lambda x: x and '/video/vi' in x)
-        for link in trailer_links:
-            if 'trailer' in link.get_text(strip=True).lower():
-                video_page_url = f"https://www.imdb.com{link['href']}"
-                return video_page_url
-        # If no trailer found, grab the first video
-        if trailer_links:
-            video_page_url = f"https://www.imdb.com{trailer_links[0]['href']}"
-            return video_page_url
-        logging.warning(f"No video found for {imdb_id}")
+        # Look for the specific trailer span format
+        trailer_spans = soup.find_all('span', class_='ipc-lockup-overlay__text ipc-lockup-overlay__text--clamp-none')
+        for span in trailer_spans:
+            if 'Trailer' in span.get_text(strip=True):
+                # Find the parent link
+                parent_link = span.find_parent('a', href=re.compile(r'/video/vi\\d+'))
+                if parent_link:
+                    video_page_url = f"https://www.imdb.com{parent_link['href']}"
+                    return video_page_url
+
+        # If no trailer found, try ascending order (oldest first) and look for first video longer than 30 seconds
+        url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,asc"
+        response = requests.get(url, headers=headers, timeout=20)
+        if response.status_code != 200:
+            logging.error(f"Failed to fetch videos for {imdb_id} (status {response.status_code})")
+            return None
+            
+        soup = BeautifulSoup(response.text, 'html.parser')
+        video_links = soup.find_all('a', href=re.compile(r'/video/vi\\d+'))
+        if not video_links:
+            video_links = soup.find_all('a', href=lambda x: x and '/video/vi' in x)
+            
+        for link in video_links:
+            # Get the duration from the parent div
+            parent_div = link.find_parent('div', class_='video-item')
+            if parent_div:
+                duration_text = parent_div.find('span', class_='video-duration')
+                if duration_text:
+                    duration = duration_text.get_text(strip=True)
+                    # Parse duration (format: "X min Y sec")
+                    minutes = 0
+                    seconds = 0
+                    if 'min' in duration:
+                        minutes = int(duration.split('min')[0].strip())
+                    if 'sec' in duration:
+                        seconds = int(duration.split('sec')[0].strip().split()[-1])
+                    total_seconds = minutes * 60 + seconds
+                    if total_seconds > 30:
+                        video_page_url = f"https://www.imdb.com{link['href']}"
+                        return video_page_url
+
+        logging.warning(f"No suitable video found for {imdb_id}")
         return None
     except Exception as e:
-        logging.error(f"Error fetching trailers for {imdb_id}: {e}")
+        logging.error(f"Error fetching videos for {imdb_id}: {e}")
         return None
 
 def get_direct_video_url_from_page(video_page_url):
