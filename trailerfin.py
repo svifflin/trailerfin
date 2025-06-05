@@ -40,55 +40,63 @@ except ValueError:
     default_worker_count = 4
 
 def get_trailer_video_page_url(imdb_id):
-    # First try descending order (newest first) for trailers
-    url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,desc"
-    try:
-        response = requests.get(url, headers=headers, timeout=20)
-        if response.status_code != 200:
-            logging.error(f"Failed to fetch trailers for {imdb_id} (status {response.status_code})")
-            return None
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        # Look for the specific trailer span format
+    def find_trailer_in_page(soup):
         trailer_spans = soup.find_all('span', class_='ipc-lockup-overlay__text ipc-lockup-overlay__text--clamp-none')
+        logging.debug(f"Found {len(trailer_spans)} spans with trailer class")
         for span in trailer_spans:
-            if 'Trailer' in span.get_text(strip=True):
-                # Find the parent link
-                parent_link = span.find_parent('a', href=re.compile(r'/video/vi\\d+'))
+            span_text = span.get_text(strip=True)
+            logging.debug(f"Checking span text: {span_text}")
+            if 'Trailer' in span_text:
+                # Find the parent link - use more lenient href matching
+                parent_link = span.find_parent('a', href=lambda x: x and '/video/vi' in x)
                 if parent_link:
                     video_page_url = f"https://www.imdb.com{parent_link['href']}"
+                    logging.debug(f"Found trailer link: {video_page_url}")
                     return video_page_url
+        return None
 
-        # If no trailer found, try ascending order (oldest first) and look for first video longer than 30 seconds
+    try:
+        # First try descending order (newest first) for trailers
+        url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,desc"
+        response = requests.get(url, headers=headers, timeout=20)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            video_page_url = find_trailer_in_page(soup)
+            if video_page_url:
+                return video_page_url
+
+        # If no trailer found in descending order, try ascending order
         url = f"https://www.imdb.com/title/{imdb_id}/videogallery/?sort=date,asc"
         response = requests.get(url, headers=headers, timeout=20)
-        if response.status_code != 200:
-            logging.error(f"Failed to fetch videos for {imdb_id} (status {response.status_code})")
-            return None
-            
-        soup = BeautifulSoup(response.text, 'html.parser')
-        video_links = soup.find_all('a', href=re.compile(r'/video/vi\\d+'))
-        if not video_links:
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            video_page_url = find_trailer_in_page(soup)
+            if video_page_url:
+                return video_page_url
+
+            # If still no trailer found, look for first video longer than 30 seconds
             video_links = soup.find_all('a', href=lambda x: x and '/video/vi' in x)
+            logging.debug(f"Found {len(video_links)} video links")
             
-        for link in video_links:
-            # Get the duration from the parent div
-            parent_div = link.find_parent('div', class_='video-item')
-            if parent_div:
-                duration_text = parent_div.find('span', class_='video-duration')
-                if duration_text:
-                    duration = duration_text.get_text(strip=True)
-                    # Parse duration (format: "X min Y sec")
-                    minutes = 0
-                    seconds = 0
-                    if 'min' in duration:
-                        minutes = int(duration.split('min')[0].strip())
-                    if 'sec' in duration:
-                        seconds = int(duration.split('sec')[0].strip().split()[-1])
-                    total_seconds = minutes * 60 + seconds
-                    if total_seconds > 30:
-                        video_page_url = f"https://www.imdb.com{link['href']}"
-                        return video_page_url
+            for link in video_links:
+                # Get the duration from the parent div
+                parent_div = link.find_parent('div', class_='video-item')
+                if parent_div:
+                    duration_text = parent_div.find('span', class_='video-duration')
+                    if duration_text:
+                        duration = duration_text.get_text(strip=True)
+                        logging.debug(f"Found duration: {duration}")
+                        # Parse duration (format: "X min Y sec")
+                        minutes = 0
+                        seconds = 0
+                        if 'min' in duration:
+                            minutes = int(duration.split('min')[0].strip())
+                        if 'sec' in duration:
+                            seconds = int(duration.split('sec')[0].strip().split()[-1])
+                        total_seconds = minutes * 60 + seconds
+                        if total_seconds > 30:
+                            video_page_url = f"https://www.imdb.com{link['href']}"
+                            return video_page_url
 
         logging.warning(f"No suitable video found for {imdb_id}")
         return None
