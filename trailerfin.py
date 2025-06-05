@@ -23,6 +23,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(mes
 base_path = os.getenv("SCAN_PATH")
 video_filename = os.getenv("VIDEO_FILENAME")
 schedule_days = int(os.getenv("SCHEDULE_DAYS", 7))
+video_start_time = int(os.getenv("VIDEO_START_TIME", 8))  # Default to 8 seconds if not set
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -129,9 +130,9 @@ def get_direct_video_url_from_page(video_page_url):
                     return 1
                 return 0
             best = sorted(mp4_urls, key=quality_key, reverse=True)[0]
-            return best['url'] + '#t=8'
+            return best['url'] + f'#t={video_start_time}'
         if playback_urls:
-            return playback_urls[0]['url'] + '#t=8'
+            return playback_urls[0]['url'] + f'#t={video_start_time}'
         logging.warning(f"No playback URLs found in JSON on page: {video_page_url}")
         return None
     except Exception as e:
