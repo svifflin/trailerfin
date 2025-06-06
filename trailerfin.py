@@ -304,12 +304,85 @@ def check_expiring_links(expiration_times, scan_path=None, worker_count=4):
                     except Exception as exc:
                         logging.error(f"Exception in worker for {imdb_id} in {root}: {exc}")
 
+def initialize_expiration_database(scan_path=None):
+    """Initialize the expiration database by scanning existing .strm files"""
+    path_to_scan = scan_path if scan_path else base_path
+    if not os.path.exists(path_to_scan):
+        logging.error(f"Provided path does not exist: {path_to_scan}")
+        return {}
+    
+    expiration_times = {}
+    strm_files_found = False
+    
+    # First, try to find existing .strm files
+    for root, dirs, files in os.walk(path_to_scan):
+        if video_filename in files:
+            strm_path = os.path.join(root, video_filename)
+            try:
+                with open(strm_path, 'r') as f:
+                    url = f.read().strip()
+                expiration_time = get_expiration_time(url)
+                if expiration_time:
+                    expiration_times[strm_path] = expiration_time
+                    strm_files_found = True
+                    logging.info(f"Found existing .strm file: {strm_path}")
+            except Exception as e:
+                logging.error(f"Error reading .strm file {strm_path}: {e}")
+    
+    if not strm_files_found:
+        logging.info("No existing .strm files found, performing full scan")
+        # If no .strm files found, do a full scan
+        scan_and_refresh_trailers(scan_path)
+        # Reload expiration times after full scan
+        expiration_times = load_expiration_times()
+    
+    return expiration_times
+
+def watch_for_new_media(scan_path=None, worker_count=4):
+    """Watch for new media folders and process them"""
+    path_to_scan = scan_path if scan_path else base_path
+    if not os.path.exists(path_to_scan):
+        logging.error(f"Provided path does not exist: {path_to_scan}")
+        return
+    
+    # Get current folders
+    current_folders = set()
+    for root, dirs, files in os.walk(path_to_scan):
+        match = re.search(r'\{imdb-(tt\d+)\}', root)
+        if match and root.rstrip(os.sep).endswith(f'{{imdb-{match.group(1)}}}'):
+            current_folders.add(root)
+    
+    return current_folders
+
 def run_continuous_monitor(scan_path=None, worker_count=4):
     logging.info("Starting continuous monitor for expiring links")
+    
+    # Initialize the database
+    expiration_times = initialize_expiration_database(scan_path)
+    save_expiration_times(expiration_times)
+    
+    # Get initial set of folders
+    last_known_folders = watch_for_new_media(scan_path, worker_count)
+    
     while True:
         try:
-            expiration_times = load_expiration_times()
+            # Check for new media
+            current_folders = watch_for_new_media(scan_path, worker_count)
+            new_folders = current_folders - last_known_folders
+            
+            if new_folders:
+                logging.info(f"Found {len(new_folders)} new media folders")
+                for root in new_folders:
+                    match = re.search(r'\{imdb-(tt\d+)\}', root)
+                    if match:
+                        imdb_id = match.group(1)
+                        process_imdb_folder(root, imdb_id, expiration_times)
+                last_known_folders = current_folders
+                save_expiration_times(expiration_times)
+            
+            # Check for expiring links
             check_expiring_links(expiration_times, scan_path, worker_count)
+            
             # Sleep for 5 minutes before next check
             time.sleep(300)
         except KeyboardInterrupt:

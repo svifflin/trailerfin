@@ -7,4 +7,4 @@ COPY requirements.txt /app/
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-ENTRYPOINT ["python", "/app/trailerfin.py", "--schedule"]
+ENTRYPOINT ["python", "/app/trailerfin.py", "--monitor"]
