@@ -41,8 +41,8 @@ It will check the expiration of the link and only update when the link has expir
 - IMDb IDs in your media folder structure
 - Make sure Theme videos are enabled in Settings > Display > Libraies per device
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="assets/trailerfin.png" width="400">
-      <img alt="trailerfin" src="assets/trailerfin.png" width="400">
+      <source media="(prefers-color-scheme: dark)" srcset="assets/trailerfin.png">
+      <img alt="trailerfin" src="assets/trailerfin.png">
     </picture>
 
 ## Setup
