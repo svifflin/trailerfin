@@ -21,7 +21,7 @@
 
 # Trailerfin
 
-Trailerfin is a tool for automatically retrieving and refreshing IMDb trailer links for your media library.
+Trailerfin is a tool for automatically retrieving and refreshing IMDb trailer links for your media library as the backdrop video.
 Instead of downloading the trailer locally, it will create a .strm file that Jellyfin can use to play the video.  
 It will check the expiration of the link and only update when the link has expired.
 
