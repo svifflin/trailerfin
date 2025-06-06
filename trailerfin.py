@@ -197,8 +197,33 @@ def load_expiration_times():
         logging.error(f"Error loading expiration times: {e}")
     return {}
 
-def process_imdb_folder(root, imdb_id, expiration_times):
+def load_ignored_titles():
+    """Load the list of ignored titles from a JSON file"""
+    ignore_file = Path("ignored_titles.json")
     try:
+        if ignore_file.exists():
+            with open(ignore_file, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logging.error(f"Error loading ignored titles: {e}")
+    return {}
+
+def save_ignored_titles(ignored_titles):
+    """Save the list of ignored titles to a JSON file"""
+    ignore_file = Path("ignored_titles.json")
+    try:
+        with open(ignore_file, 'w') as f:
+            json.dump(ignored_titles, f)
+    except Exception as e:
+        logging.error(f"Error saving ignored titles: {e}")
+
+def process_imdb_folder(root, imdb_id, expiration_times, ignored_titles):
+    try:
+        # Check if this title is in the ignore list
+        if imdb_id in ignored_titles:
+            logging.info(f"Skipping ignored title {imdb_id} in {root}")
+            return
+
         backdrops_path = os.path.join(root, "backdrops")
         strm_path = os.path.join(backdrops_path, video_filename)
         
@@ -221,6 +246,15 @@ def process_imdb_folder(root, imdb_id, expiration_times):
                 if new_expiration:
                     expiration_times[strm_path] = new_expiration
                     save_expiration_times(expiration_times)
+        else:
+            # Add to ignored titles if no trailer found
+            ignored_titles[imdb_id] = {
+                'path': root,
+                'last_checked': int(time.time()),
+                'reason': 'No trailer available'
+            }
+            save_ignored_titles(ignored_titles)
+            logging.info(f"Added {imdb_id} to ignored titles list")
     except Exception as e:
         logging.error(f"Worker error for {imdb_id} in {root}: {e}")
 
@@ -230,8 +264,9 @@ def scan_and_refresh_trailers(scan_path=None, worker_count=4):
         logging.error(f"Provided path does not exist: {path_to_scan}")
         return
     
-    # Load existing expiration times
+    # Load existing expiration times and ignored titles
     expiration_times = load_expiration_times()
+    ignored_titles = load_ignored_titles()
     
     imdb_folders = []
     for root, dirs, files in os.walk(path_to_scan):
@@ -248,7 +283,7 @@ def scan_and_refresh_trailers(scan_path=None, worker_count=4):
     
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_to_folder = {
-            executor.submit(process_imdb_folder, root, imdb_id, expiration_times): (root, imdb_id) 
+            executor.submit(process_imdb_folder, root, imdb_id, expiration_times, ignored_titles): (root, imdb_id) 
             for root, imdb_id in imdb_folders
         }
         for future in as_completed(future_to_folder):
@@ -294,7 +329,7 @@ def check_expiring_links(expiration_times, scan_path=None, worker_count=4):
         if imdb_folders:
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
                 future_to_folder = {
-                    executor.submit(process_imdb_folder, root, imdb_id, expiration_times): (root, imdb_id) 
+                    executor.submit(process_imdb_folder, root, imdb_id, expiration_times, ignored_titles): (root, imdb_id) 
                     for root, imdb_id in imdb_folders
                 }
                 for future in as_completed(future_to_folder):
@@ -361,6 +396,9 @@ def run_continuous_monitor(scan_path=None, worker_count=4):
     expiration_times = initialize_expiration_database(scan_path)
     save_expiration_times(expiration_times)
     
+    # Load ignored titles
+    ignored_titles = load_ignored_titles()
+    
     # Get initial set of folders
     last_known_folders = watch_for_new_media(scan_path, worker_count)
     
@@ -376,7 +414,7 @@ def run_continuous_monitor(scan_path=None, worker_count=4):
                     match = re.search(r'\{imdb-(tt\d+)\}', root)
                     if match:
                         imdb_id = match.group(1)
-                        process_imdb_folder(root, imdb_id, expiration_times)
+                        process_imdb_folder(root, imdb_id, expiration_times, ignored_titles)
                 last_known_folders = current_folders
                 save_expiration_times(expiration_times)
             
