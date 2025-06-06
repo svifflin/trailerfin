@@ -10,6 +10,8 @@ import time
 import threading
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
+from pathlib import Path
 
 try:
     import schedule
@@ -116,7 +118,6 @@ def get_direct_video_url_from_page(video_page_url):
         if not script_tag:
             logging.error(f"No __NEXT_DATA__ script tag found on page: {video_page_url}")
             return None
-        import json
         data = json.loads(script_tag.string)
         playback_urls = data['props']['pageProps']['videoPlaybackData']['video']['playbackURLs']
         mp4_urls = [item for item in playback_urls if item.get('videoMimeType') == 'MP4']
@@ -166,19 +167,60 @@ def is_strm_expired(strm_path):
         logging.error(f"Error checking expiration for {strm_path}: {e}")
         return True
 
-def process_imdb_folder(root, imdb_id):
+def get_expiration_time(url):
+    try:
+        parsed = urllib.parse.urlparse(url)
+        query = urllib.parse.parse_qs(parsed.query)
+        expires_list = query.get('Expires')
+        if not expires_list:
+            return None
+        return int(expires_list[0])
+    except Exception as e:
+        logging.error(f"Error parsing expiration time from URL: {e}")
+        return None
+
+def save_expiration_times(expiration_times):
+    cache_file = Path("trailer_expirations.json")
+    try:
+        with open(cache_file, 'w') as f:
+            json.dump(expiration_times, f)
+    except Exception as e:
+        logging.error(f"Error saving expiration times: {e}")
+
+def load_expiration_times():
+    cache_file = Path("trailer_expirations.json")
+    try:
+        if cache_file.exists():
+            with open(cache_file, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logging.error(f"Error loading expiration times: {e}")
+    return {}
+
+def process_imdb_folder(root, imdb_id, expiration_times):
     try:
         backdrops_path = os.path.join(root, "backdrops")
         strm_path = os.path.join(backdrops_path, video_filename)
-        if not is_strm_expired(strm_path):
-            logging.info(f"Trailer link still valid for {imdb_id} in {root}")
+        
+        # Check if we need to refresh based on expiration time
+        current_time = int(time.time())
+        expiration_time = expiration_times.get(strm_path)
+        
+        if expiration_time and current_time < expiration_time:
+            logging.info(f"Trailer link still valid for {imdb_id} in {root} (expires in {expiration_time - current_time} seconds)")
             return
+        
         logging.info(f"Refreshing trailer for {imdb_id} in {root}")
         video_page_url = get_trailer_video_page_url(imdb_id)
         if video_page_url:
             video_url = get_direct_video_url_from_page(video_page_url)
             if video_url:
                 create_or_update_strm_file(root, video_url)
+                # Update expiration time
+                new_expiration = get_expiration_time(video_url)
+                if new_expiration:
+                    expiration_times[strm_path] = new_expiration
+                    save_expiration_times(expiration_times)
     except Exception as e:
         logging.error(f"Worker error for {imdb_id} in {root}: {e}")
 
@@ -187,6 +229,10 @@ def scan_and_refresh_trailers(scan_path=None, worker_count=4):
     if not os.path.exists(path_to_scan):
         logging.error(f"Provided path does not exist: {path_to_scan}")
         return
+    
+    # Load existing expiration times
+    expiration_times = load_expiration_times()
+    
     imdb_folders = []
     for root, dirs, files in os.walk(path_to_scan):
         match = re.search(r'\{imdb-(tt\d+)\}', root)
@@ -195,11 +241,16 @@ def scan_and_refresh_trailers(scan_path=None, worker_count=4):
                 continue
             imdb_id = match.group(1)
             imdb_folders.append((root, imdb_id))
+    
     if not imdb_folders:
         logging.info("No IMDb folders found to process.")
         return
+    
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_to_folder = {executor.submit(process_imdb_folder, root, imdb_id): (root, imdb_id) for root, imdb_id in imdb_folders}
+        future_to_folder = {
+            executor.submit(process_imdb_folder, root, imdb_id, expiration_times): (root, imdb_id) 
+            for root, imdb_id in imdb_folders
+        }
         for future in as_completed(future_to_folder):
             root, imdb_id = future_to_folder[future]
             try:
@@ -220,13 +271,65 @@ def run_scheduler(scan_path=None, worker_count=4):
         schedule.run_pending()
         time.sleep(60)
 
+def check_expiring_links(expiration_times, scan_path=None, worker_count=4):
+    current_time = int(time.time())
+    expiring_links = []
+    
+    # Find links that will expire in the next hour
+    for strm_path, expiration_time in expiration_times.items():
+        if expiration_time - current_time < 3600:  # Less than 1 hour until expiration
+            expiring_links.append(strm_path)
+    
+    if expiring_links:
+        logging.info(f"Found {len(expiring_links)} links expiring soon")
+        # Extract IMDb IDs from the paths
+        imdb_folders = []
+        for strm_path in expiring_links:
+            root = os.path.dirname(os.path.dirname(strm_path))  # Go up two levels from strm file
+            match = re.search(r'\{imdb-(tt\d+)\}', root)
+            if match:
+                imdb_id = match.group(1)
+                imdb_folders.append((root, imdb_id))
+        
+        if imdb_folders:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                future_to_folder = {
+                    executor.submit(process_imdb_folder, root, imdb_id, expiration_times): (root, imdb_id) 
+                    for root, imdb_id in imdb_folders
+                }
+                for future in as_completed(future_to_folder):
+                    root, imdb_id = future_to_folder[future]
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        logging.error(f"Exception in worker for {imdb_id} in {root}: {exc}")
+
+def run_continuous_monitor(scan_path=None, worker_count=4):
+    logging.info("Starting continuous monitor for expiring links")
+    while True:
+        try:
+            expiration_times = load_expiration_times()
+            check_expiring_links(expiration_times, scan_path, worker_count)
+            # Sleep for 5 minutes before next check
+            time.sleep(300)
+        except KeyboardInterrupt:
+            logging.info("Continuous monitor stopped by user")
+            break
+        except Exception as e:
+            logging.error(f"Error in continuous monitor: {e}")
+            time.sleep(60)  # Wait a minute before retrying on error
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Scan and refresh IMDb trailers.")
     parser.add_argument('--dir', type=str, help='Directory to scan (defaults to /mnt/plex)')
     parser.add_argument('--schedule', action='store_true', help='Run as a weekly scheduled job')
     parser.add_argument('--workers', type=int, default=default_worker_count, help=f'Number of worker threads (default: {default_worker_count})')
+    parser.add_argument('--monitor', action='store_true', help='Run in continuous monitoring mode')
     args = parser.parse_args()
-    if args.schedule:
+    
+    if args.monitor:
+        run_continuous_monitor(args.dir, args.workers)
+    elif args.schedule:
         run_scheduler(args.dir, args.workers)
     else:
         scan_and_refresh_trailers(args.dir, args.workers)
