@@ -45,18 +45,30 @@ except ValueError:
 def get_trailer_video_page_url(imdb_id):
     def find_trailer_in_page(soup):
         trailer_spans = soup.find_all('span', class_='ipc-lockup-overlay__text ipc-lockup-overlay__text--clamp-none')
-        logging.debug(f"Found {len(trailer_spans)} spans with trailer class")
+        logging.debug(f"Found {len(trailer_spans)} spans with video class")
+        
+        # First pass: look for trailers
         for span in trailer_spans:
             span_text = span.get_text(strip=True)
             logging.debug(f"Checking span text: {span_text}")
-            # Check for both "Trailer" and "Clip" in the text
-            if 'Trailer' in span_text or 'Clip' in span_text:
-                # Find the parent link - use more lenient href matching
+            if 'Trailer' in span_text:
                 parent_link = span.find_parent('a', href=lambda x: x and '/video/vi' in x)
                 if parent_link:
                     video_page_url = f"https://www.imdb.com{parent_link['href']}"
-                    logging.debug(f"Found video link: {video_page_url}")
+                    logging.debug(f"Found trailer link: {video_page_url}")
                     return video_page_url
+        
+        # Second pass: look for clips if no trailer found
+        for span in trailer_spans:
+            span_text = span.get_text(strip=True)
+            logging.debug(f"Checking span text: {span_text}")
+            if 'Clip' in span_text:
+                parent_link = span.find_parent('a', href=lambda x: x and '/video/vi' in x)
+                if parent_link:
+                    video_page_url = f"https://www.imdb.com{parent_link['href']}"
+                    logging.debug(f"Found clip link: {video_page_url}")
+                    return video_page_url
+        
         return None
 
     try:
@@ -326,14 +338,21 @@ def check_expiring_links(expiration_times, scan_path=None, worker_count=4, ignor
     # Find links that will expire in the next hour
     for strm_path, expiration_time in expiration_times.items():
         if expiration_time - current_time < 3600:  # Less than 1 hour until expiration
-            expiring_links.append(strm_path)
+            # Extract IMDb ID from the path
+            root = os.path.dirname(os.path.dirname(strm_path))
+            match = re.search(r'\{imdb-(tt\d+)\}', root)
+            if match:
+                imdb_id = match.group(1)
+                # Only include if not in ignored titles
+                if imdb_id not in ignored_titles:
+                    expiring_links.append(strm_path)
     
     if expiring_links:
         logging.info(f"Found {len(expiring_links)} links expiring soon")
         # Extract IMDb IDs from the paths
         imdb_folders = []
         for strm_path in expiring_links:
-            root = os.path.dirname(os.path.dirname(strm_path))  # Go up two levels from strm file
+            root = os.path.dirname(os.path.dirname(strm_path))
             match = re.search(r'\{imdb-(tt\d+)\}', root)
             if match:
                 imdb_id = match.group(1)
