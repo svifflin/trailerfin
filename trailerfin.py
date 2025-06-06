@@ -218,6 +218,12 @@ def save_ignored_titles(ignored_titles):
     except Exception as e:
         logging.error(f"Error saving ignored titles: {e}")
 
+def format_duration(seconds):
+    """Format seconds into minutes and seconds"""
+    minutes = seconds // 60
+    remaining_seconds = seconds % 60
+    return f"{minutes}min {remaining_seconds}sec"
+
 def process_imdb_folder(root, imdb_id, expiration_times, ignored_titles):
     try:
         # Check if this title is in the ignore list
@@ -233,7 +239,9 @@ def process_imdb_folder(root, imdb_id, expiration_times, ignored_titles):
         expiration_time = expiration_times.get(strm_path)
         
         if expiration_time and current_time < expiration_time:
-            logging.info(f"Trailer link still valid for {imdb_id} in {root} (expires in {expiration_time - current_time} seconds)")
+            time_until_expiry = expiration_time - current_time
+            formatted_duration = format_duration(time_until_expiry)
+            logging.info(f"Trailer link still valid for {imdb_id} in {root} (expires in {formatted_duration})")
             return
         
         logging.info(f"Refreshing trailer for {imdb_id} in {root}")
