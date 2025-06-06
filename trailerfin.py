@@ -24,8 +24,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(mes
 
 base_path = os.getenv("SCAN_PATH")
 video_filename = os.getenv("VIDEO_FILENAME")
-schedule_days = int(os.getenv("SCHEDULE_DAYS", 7))
-video_start_time = int(os.getenv("VIDEO_START_TIME", 8))  # Default to 8 seconds if not set
+schedule_days = int(os.getenv("SCHEDULE_DAYS", 1))
+video_start_time = int(os.getenv("VIDEO_START_TIME", 10))  # Default to 10 seconds if not set
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -49,12 +49,13 @@ def get_trailer_video_page_url(imdb_id):
         for span in trailer_spans:
             span_text = span.get_text(strip=True)
             logging.debug(f"Checking span text: {span_text}")
-            if 'Trailer' in span_text:
+            # Check for both "Trailer" and "Clip" in the text
+            if 'Trailer' in span_text or 'Clip' in span_text:
                 # Find the parent link - use more lenient href matching
                 parent_link = span.find_parent('a', href=lambda x: x and '/video/vi' in x)
                 if parent_link:
                     video_page_url = f"https://www.imdb.com{parent_link['href']}"
-                    logging.debug(f"Found trailer link: {video_page_url}")
+                    logging.debug(f"Found video link: {video_page_url}")
                     return video_page_url
         return None
 
