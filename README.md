@@ -1,3 +1,24 @@
+<div align="center">
+  <a href="https://github.com/Pukabyte/trailerfin">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/logo.png" width="400">
+      <img alt="trailerfin" src="assets/logo.png" width="400">
+    </picture>
+  </a>
+</div>
+
+<div align="center">
+  <a href="https://github.com/Pukabyte/trailerfin/stargazers"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/Pukabyte/trailerfin?label=Trailerfin"></a>
+  <a href="https://github.com/Pukabyte/trailerfin/issues"><img alt="Issues" src="https://img.shields.io/github/issues/Pukabyte/trailerfin" /></a>
+  <a href="https://github.com/Pukabyte/trailerfin/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/Pukabyte/trailerfin"></a>
+  <a href="https://github.com/Pukabyte/trailerfin/graphs/contributors"><img alt="Contributors" src="https://img.shields.io/github/contributors/Pukabyte/trailerfin" /></a>
+  <a href="https://discord.gg/vMSnNcd7m5"><img alt="Discord" src="https://img.shields.io/badge/Join%20discord-8A2BE2" /></a>
+</div>
+
+<div align="center">
+  <p>Automatically manage IMDb trailers for your media library.</p>
+</div>
+
 # Trailerfin
 
 Trailerfin is a tool for automatically retrieving and refreshing IMDb trailer links for your media library.
