@@ -306,7 +306,11 @@ def run_scheduler(scan_path=None, worker_count=4):
         schedule.run_pending()
         time.sleep(60)
 
-def check_expiring_links(expiration_times, scan_path=None, worker_count=4):
+def check_expiring_links(expiration_times, scan_path=None, worker_count=4, ignored_titles=None):
+    """Check for links that are about to expire and refresh them"""
+    if ignored_titles is None:
+        ignored_titles = load_ignored_titles()
+        
     current_time = int(time.time())
     expiring_links = []
     
@@ -419,7 +423,7 @@ def run_continuous_monitor(scan_path=None, worker_count=4):
                 save_expiration_times(expiration_times)
             
             # Check for expiring links
-            check_expiring_links(expiration_times, scan_path, worker_count)
+            check_expiring_links(expiration_times, scan_path, worker_count, ignored_titles)
             
             # Sleep for 5 minutes before next check
             time.sleep(300)
