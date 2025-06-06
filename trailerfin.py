@@ -410,14 +410,18 @@ def watch_for_new_media(scan_path=None, worker_count=4):
     path_to_scan = scan_path if scan_path else base_path
     if not os.path.exists(path_to_scan):
         logging.error(f"Provided path does not exist: {path_to_scan}")
-        return
+        return set()
     
     # Get current folders
     current_folders = set()
     for root, dirs, files in os.walk(path_to_scan):
         match = re.search(r'\{imdb-(tt\d+)\}', root)
         if match and root.rstrip(os.sep).endswith(f'{{imdb-{match.group(1)}}}'):
-            current_folders.add(root)
+            # Verify this is a media folder by checking for video files
+            has_video = any(f.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.wmv')) for f in files)
+            if has_video:
+                current_folders.add(root)
+                logging.debug(f"Found media folder: {root}")
     
     return current_folders
 
@@ -433,6 +437,7 @@ def run_continuous_monitor(scan_path=None, worker_count=4):
     
     # Get initial set of folders
     last_known_folders = watch_for_new_media(scan_path, worker_count)
+    logging.info(f"Initial scan found {len(last_known_folders)} media folders")
     
     while True:
         try:
@@ -446,6 +451,7 @@ def run_continuous_monitor(scan_path=None, worker_count=4):
                     match = re.search(r'\{imdb-(tt\d+)\}', root)
                     if match:
                         imdb_id = match.group(1)
+                        logging.info(f"Processing new media: {root}")
                         process_imdb_folder(root, imdb_id, expiration_times, ignored_titles)
                 last_known_folders = current_folders
                 save_expiration_times(expiration_times)
