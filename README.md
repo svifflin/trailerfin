@@ -34,13 +34,13 @@ Create a `.env` file in the project root with the following variables:
 SCAN_PATH=/path/to/your/media
 VIDEO_FILENAME=trailer.strm
 WORKERS=4
-VIDEO_START_TIME=8
+VIDEO_START_TIME=10
 ```
 
 - `SCAN_PATH`: Directory to scan for IMDb IDs
 - `VIDEO_FILENAME`: Name of the .strm file to update
 - `WORKERS`: Amount of workers to use
-- `VIDEO_START_TIME`: Start time in seconds for the video (default: 8)
+- `VIDEO_START_TIME`: Start time in seconds for the video (default: 10)
 
 ### 3. Build and Run with Docker
 
@@ -96,11 +96,6 @@ This mode will:
 - Automatically refresh links before they expire
 - Skip movies without trailers
 - Run in the background
-
-### Scheduled Run
-```sh
-python trailerfin.py --schedule
-```
 
 ## Features in Detail
 
