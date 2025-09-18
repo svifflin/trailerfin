@@ -12,6 +12,7 @@ services:
       - saltbox
     labels:
       com.github.saltbox.saltbox_managed: true
+      com.centurylinklabs.watchtower.enable: false
     volumes:
       - /mnt:/mnt
       - /opt/trailerfin:/app
