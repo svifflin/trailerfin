@@ -26,6 +26,8 @@ base_path = os.getenv("SCAN_PATH")
 video_filename = os.getenv("VIDEO_FILENAME")
 schedule_days = int(os.getenv("SCHEDULE_DAYS", 1))
 video_start_time = int(os.getenv("VIDEO_START_TIME", 10))  # Default to 10 seconds if not set
+tmdb_api_key = os.getenv("TMDB_API_KEY")
+algolia_api_key = os.getenv("ALGOLIA_API_KEY")
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -68,6 +70,72 @@ def tmdb_to_imdb(tmdb_id):
             logging.error(f"TMDB API error {response.status_code} for TMDB ID {tmdb_id}")
     except Exception as e:
         logging.error(f"Error converting TMDB->IMDB: {e}")
+    return None
+
+def tvdb_to_imdb(tvdb_id):
+    """
+    Convert TVDB ID to IMDB ID using Algolia search on TVDB index.
+    Uses the TVShowTime Algolia endpoint to search for TVDB series and extract IMDB ID.
+    """
+    if not algolia_api_key:
+        logging.error("ALGOLIA_API_KEY not set. Please set it in the .env file or as an environment variable.")
+        return None
+
+    try:
+        # Algolia endpoint for TVShowTime TVDB search
+        url = "https://tvshowtime-dsn.algolia.net/1/indexes/*/queries"
+
+        # Headers as specified
+        headers = {
+            'x-algolia-agent': 'Algolia for vanilla JavaScript (lite) 3.32.0;instantsearch.js (3.5.3);JS Helper (2.28.0)',
+            'x-algolia-application-id': 'tvshowtime',
+            'x-algolia-api-key': algolia_api_key,
+            'Content-Type': 'application/json'
+        }
+
+        # Request data with TVDB ID as query
+        data = {
+            "requests": [{
+                "indexName": "TVDB",
+                "params": f"query={tvdb_id}&maxValuesPerFacet=1&page=0"
+            }]
+        }
+
+        response = requests.post(url, headers=headers, json=data, timeout=15)
+
+        if response.status_code == 200:
+            result = response.json()
+
+            # Navigate through the response structure
+            if result.get("results") and len(result["results"]) > 0:
+                hits = result["results"][0].get("hits", [])
+
+                # Look for the exact TVDB ID match
+                for hit in hits:
+                    if str(hit.get("id")) == str(tvdb_id):
+                        # Extract IMDB ID from remote_ids
+                        remote_ids = hit.get("remote_ids", [])
+                        for remote_id in remote_ids:
+                            if remote_id.get("type") == 2 and remote_id.get("sourceName") == "IMDB":
+                                imdb_id = remote_id.get("id")
+                                if imdb_id and imdb_id.startswith("tt"):
+                                    logging.debug(f"Found IMDB ID {imdb_id} for TVDB {tvdb_id}")
+                                    return imdb_id
+
+                logging.warning(f"TVDB ID {tvdb_id} found in Algolia but no IMDB ID available")
+            else:
+                logging.warning(f"No results found for TVDB ID {tvdb_id} in Algolia")
+
+        else:
+            logging.error(f"Algolia API error {response.status_code} for TVDB ID {tvdb_id}")
+
+    except requests.exceptions.Timeout:
+        logging.error(f"Timeout converting TVDB {tvdb_id} to IMDB via Algolia")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Network error converting TVDB {tvdb_id} to IMDB: {e}")
+    except Exception as e:
+        logging.error(f"Unexpected error converting TVDB {tvdb_id} to IMDB: {e}")
+
     return None
 
 def get_trailer_video_page_url(imdb_id):
@@ -189,25 +257,6 @@ def create_or_update_strm_file(folder_path, video_url):
         f.write(video_url)
     logging.info(f"Updated {strm_path}")
 
-def is_strm_expired(strm_path):
-    if not os.path.exists(strm_path):
-        return True
-    try:
-        with open(strm_path, 'r') as f:
-            url = f.read().strip()
-        parsed = urllib.parse.urlparse(url)
-        query = urllib.parse.parse_qs(parsed.query)
-        expires_list = query.get('Expires')
-        if not expires_list:
-            return True
-        expires = int(expires_list[0])
-        import time
-        now = int(time.time())
-        return now >= expires
-    except Exception as e:
-        logging.error(f"Error checking expiration for {strm_path}: {e}")
-        return True
-
 def get_expiration_time(url):
     try:
         parsed = urllib.parse.urlparse(url)
@@ -264,50 +313,123 @@ def format_duration(seconds):
     remaining_seconds = seconds % 60
     return f"{minutes}min {remaining_seconds}sec"
 
-def process_imdb_folder(root, imdb_id, expiration_times, ignored_titles):
-    try:
-        # Check if this title is in the ignore list
-        if imdb_id in ignored_titles:
-            logging.info(f"Skipping ignored title {imdb_id} in {root}")
-            return
+def detect_and_convert_id(path):
+    """
+    Detect ID format in path and convert to IMDB ID.
+    Returns (imdb_id, id_type) or (None, None) if not found or conversion failed.
+    """
+    # Define ID patterns as list of tuples (regex, type, converter function)
+    # This makes it easy to add new ID types (Open/Closed principle)
+    id_patterns = [
+        (r'\{imdb-(tt\d+)\}', 'imdb', lambda m: m.group(1)),  # Direct IMDB ID
+        (r'\{tmdb-(\d+)\}', 'tmdb', lambda m: tmdb_to_imdb(m.group(1))),
+        (r'\{tvdb-(\d+)\}', 'tvdb', lambda m: tvdb_to_imdb(m.group(1))),
+    ]
 
-        backdrops_path = os.path.join(root, "backdrops")
-        strm_path = os.path.join(backdrops_path, video_filename)
-        
-        # Check if we need to refresh based on expiration time
-        current_time = int(time.time())
-        expiration_time = expiration_times.get(strm_path)
-        
-        if expiration_time and current_time < expiration_time:
-            time_until_expiry = expiration_time - current_time
-            formatted_duration = format_duration(time_until_expiry)
-            logging.info(f"Trailer link still valid for {imdb_id} in {root} (expires in {formatted_duration})")
-            return
-        
-        logging.info(f"Refreshing trailer for {imdb_id} in {root}")
-        video_page_url = get_trailer_video_page_url(imdb_id)
-        if video_page_url:
-            video_url = get_direct_video_url_from_page(video_page_url)
-            if video_url:
-                create_or_update_strm_file(root, video_url)
-                # Update expiration time
-                new_expiration = get_expiration_time(video_url)
-                if new_expiration:
-                    expiration_times[strm_path] = new_expiration
-                    save_expiration_times(expiration_times)
-        else:
-            # Add to ignored titles if no trailer found
-            ignored_titles[imdb_id] = {
-                'path': root,
-                'last_checked': int(time.time()),
-                'reason': 'No trailer available'
-            }
-            save_ignored_titles(ignored_titles)
-            logging.info(f"Added {imdb_id} to ignored titles list")
-    except Exception as e:
-        logging.error(f"Worker error for {imdb_id} in {root}: {e}")
+    for pattern, id_type, converter in id_patterns:
+        match = re.search(pattern, path)
+        if match:
+            expected_end = f'{{{id_type}-{match.group(1)}}}'
+            if path.rstrip(os.sep).endswith(expected_end):
+                imdb_id = converter(match)
+                if imdb_id:
+                    return imdb_id, id_type
+                else:
+                    logging.warning(f"Conversion failed for {id_type.upper()} ID {match.group(1)} in {path}")
+
+    return None, None
+
+def has_id_format(path):
+    """
+    Check if path has any recognized ID format (for monitoring without conversion).
+    Returns the ID type if found, None otherwise.
+    """
+    # Reuse patterns from detect_and_convert_id for DRY
+    id_patterns = [
+        r'\{imdb-(tt\d+)\}',
+        r'\{tmdb-(\d+)\}',
+        r'\{tvdb-(\d+)\}',
+    ]
+
+    for pattern in id_patterns:
+        match = re.search(pattern, path)
+        if match:
+            # Extract type from pattern
+            id_type = pattern.split('-')[1].split('}')[0]
+            expected_end = f'{{{id_type}-{match.group(1)}}}'
+            if path.rstrip(os.sep).endswith(expected_end):
+                return id_type  # 'imdb', 'tmdb', 'tvdb'
+
+    return None
+
+def process_folder_by_path(root, expiration_times, ignored_titles):
+    """
+    Process a single folder by detecting its ID format and converting to IMDB.
+    Returns True if processed (success or skip), False if invalid folder.
+    """
+    imdb_id, id_type = detect_and_convert_id(root)
+
+    if not imdb_id:
+        if id_type:
+            logging.warning(f"Could not convert {id_type.upper()} ID to IMDB for {root}")
+        return False
+
+    # Check if this title is in the ignore list
+    if imdb_id in ignored_titles:
+        logging.info(f"Skipping ignored title {imdb_id} in {root}")
+        return True
+
+    strm_path = os.path.join(root, video_filename)
+
+    # Check if we need to refresh based on expiration time
+    current_time = int(time.time())
+    expiration_time = expiration_times.get(strm_path)
+
+    if expiration_time and current_time < expiration_time:
+        time_until_expiry = expiration_time - current_time
+        formatted_duration = format_duration(time_until_expiry)
+        logging.info(f"Trailer link still valid for {imdb_id} in {root} (expires in {formatted_duration})")
+        return True
+
+    logging.info(f"Refreshing trailer for {imdb_id} in {root}")
+    video_page_url = get_trailer_video_page_url(imdb_id)
+    if video_page_url:
+        video_url = get_direct_video_url_from_page(video_page_url)
+        if video_url:
+            create_or_update_strm_file(root, video_url)
+            # Update expiration time
+            new_expiration = get_expiration_time(video_url)
+            if new_expiration:
+                expiration_times[strm_path] = new_expiration
+                save_expiration_times(expiration_times)
+            return True
+    else:
+        # Add to ignored titles if no trailer found
+        ignored_titles[imdb_id] = {
+            'path': root,
+            'last_checked': int(time.time()),
+            'reason': 'No trailer available'
+        }
+        save_ignored_titles(ignored_titles)
+        logging.info(f"Added {imdb_id} to ignored titles list")
+        return True
+
+    return False
+
+def scan_folders_for_ids(scan_path):
+    """
+    Scan folders and return list of (root, imdb_id) tuples for valid IMDB-convertible folders.
+    """
+    valid_folders = []
+    for root, dirs, files in os.walk(scan_path):
+        imdb_id, _ = detect_and_convert_id(root)
+        if imdb_id:
+            valid_folders.append((root, imdb_id))
+
+    return valid_folders
 
 def scan_and_refresh_trailers(scan_path=None, worker_count=4):
+    """Main scanning function - refactored to use centralized ID detection."""
     path_to_scan = scan_path if scan_path else base_path
     if not os.path.exists(path_to_scan):
         logging.error(f"Provided path does not exist: {path_to_scan}")
@@ -317,22 +439,16 @@ def scan_and_refresh_trailers(scan_path=None, worker_count=4):
     expiration_times = load_expiration_times()
     ignored_titles = load_ignored_titles()
     
-    imdb_folders = []
-    for root, dirs, files in os.walk(path_to_scan):
-        match = re.search(r'\{imdb-(tt\d+)\}', root)
-        if match:
-            if not root.rstrip(os.sep).endswith(f'{{imdb-{match.group(1)}}}'): 
-                continue
-            imdb_id = match.group(1)
-            imdb_folders.append((root, imdb_id))
+    # Use centralized scanning
+    imdb_folders = scan_folders_for_ids(path_to_scan)
     
     if not imdb_folders:
-        logging.info("No IMDb folders found to process.")
+        logging.info("No valid IMDB-convertible folders found to process.")
         return
     
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_to_folder = {
-            executor.submit(process_imdb_folder, root, imdb_id, expiration_times, ignored_titles): (root, imdb_id) 
+            executor.submit(process_folder_by_path, root, expiration_times, ignored_titles): (root, imdb_id) 
             for root, imdb_id in imdb_folders
         }
         for future in as_completed(future_to_folder):
@@ -366,31 +482,28 @@ def check_expiring_links(expiration_times, scan_path=None, worker_count=4, ignor
     # Find links that will expire in the next hour
     for strm_path, expiration_time in expiration_times.items():
         if expiration_time - current_time < 3600:  # Less than 1 hour until expiration
-            # Extract IMDb ID from the path
             root = os.path.dirname(os.path.dirname(strm_path))
-            match = re.search(r'\{imdb-(tt\d+)\}', root)
-            if match:
-                imdb_id = match.group(1)
-                # Only include if not in ignored titles
-                if imdb_id not in ignored_titles:
-                    expiring_links.append(strm_path)
+            imdb_id, id_type = detect_and_convert_id(root)
+            if imdb_id and imdb_id not in ignored_titles:
+                expiring_links.append(strm_path)
+            elif id_type:
+                logging.debug(f"Skipping expired link for {id_type.upper()} folder due to ignore list")
     
     if expiring_links:
         logging.info(f"Found {len(expiring_links)} links expiring soon")
-        # Extract IMDb IDs from the paths
-        imdb_folders = []
+        # Extract IDs from the paths using centralized detection
+        expiring_folders = []
         for strm_path in expiring_links:
             root = os.path.dirname(os.path.dirname(strm_path))
-            match = re.search(r'\{imdb-(tt\d+)\}', root)
-            if match:
-                imdb_id = match.group(1)
-                imdb_folders.append((root, imdb_id))
+            imdb_id, _ = detect_and_convert_id(root)
+            if imdb_id:
+                expiring_folders.append((root, imdb_id))
         
-        if imdb_folders:
+        if expiring_folders:
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
                 future_to_folder = {
-                    executor.submit(process_imdb_folder, root, imdb_id, expiration_times, ignored_titles): (root, imdb_id) 
-                    for root, imdb_id in imdb_folders
+                    executor.submit(process_folder_by_path, root, expiration_times, ignored_titles): (root, imdb_id) 
+                    for root, imdb_id in expiring_folders
                 }
                 for future in as_completed(future_to_folder):
                     root, imdb_id = future_to_folder[future]
@@ -440,16 +553,16 @@ def watch_for_new_media(scan_path=None, worker_count=4):
         logging.error(f"Provided path does not exist: {path_to_scan}")
         return set()
     
-    # Get current folders
+    # Get current folders with any ID format
     current_folders = set()
     for root, dirs, files in os.walk(path_to_scan):
-        match = re.search(r'\{imdb-(tt\d+)\}', root)
-        if match and root.rstrip(os.sep).endswith(f'{{imdb-{match.group(1)}}}'):
+        id_type = has_id_format(root)
+        if id_type:
             # Verify this is a media folder by checking for video files
             has_video = any(f.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.wmv')) for f in files)
             if has_video:
                 current_folders.add(root)
-                logging.debug(f"Found media folder: {root}")
+                logging.debug(f"Found media folder with {id_type.upper()} ID: {root}")
     
     return current_folders
 
@@ -476,11 +589,8 @@ def run_continuous_monitor(scan_path=None, worker_count=4):
             if new_folders:
                 logging.info(f"Found {len(new_folders)} new media folders")
                 for root in new_folders:
-                    match = re.search(r'\{imdb-(tt\d+)\}', root)
-                    if match:
-                        imdb_id = match.group(1)
-                        logging.info(f"Processing new media: {root}")
-                        process_imdb_folder(root, imdb_id, expiration_times, ignored_titles)
+                    # Use centralized processing
+                    process_folder_by_path(root, expiration_times, ignored_titles)
                 last_known_folders = current_folders
                 save_expiration_times(expiration_times)
             
