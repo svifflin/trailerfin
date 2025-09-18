@@ -496,15 +496,43 @@ def run_continuous_monitor(scan_path=None, worker_count=4):
             logging.error(f"Error in continuous monitor: {e}")
             time.sleep(60)  # Wait a minute before retrying on error
 
+def purge_expiration_files():
+    """Purge all .strm files listed in trailer_expirations.json and empty the file"""
+    expiration_times = load_expiration_times()
+    if not expiration_times:
+        logging.info("No expiration times to purge.")
+        return
+
+    purged_count = 0
+    for strm_path in expiration_times.keys():
+        try:
+            if os.path.exists(strm_path):
+                os.remove(strm_path)
+                logging.info(f"Purged {strm_path}")
+                purged_count += 1
+            else:
+                logging.warning(f"File not found: {strm_path}")
+        except Exception as e:
+            logging.error(f"Error purging {strm_path}: {e}")
+
+    # Empty the expiration times file
+    save_expiration_times({})
+    logging.info(f"Purged {purged_count} files and emptied trailer_expirations.json")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Scan and refresh IMDb trailers.")
     parser.add_argument('--dir', type=str, help='Directory to scan (defaults to /mnt/plex)')
     parser.add_argument('--schedule', action='store_true', help='Run as a weekly scheduled job')
     parser.add_argument('--workers', type=int, default=default_worker_count, help=f'Number of worker threads (default: {default_worker_count})')
     parser.add_argument('--monitor', action='store_true', help='Run in continuous monitoring mode')
+    parser.add_argument('--purge', action='store_true', help='Purge all .strm files from trailer_expirations.json and empty the file')
     args = parser.parse_args()
-    
-    if args.monitor:
+
+    if args.purge:
+        purge_expiration_files()
+        # After purging, run a full scan to rebuild
+        run_continuous_monitor(args.dir, args.workers)
+    elif args.monitor:
         run_continuous_monitor(args.dir, args.workers)
     elif args.schedule:
         run_scheduler(args.dir, args.workers)
